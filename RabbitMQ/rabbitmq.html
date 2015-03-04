@@ -1,0 +1,340 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<link rel="stylesheet" type="text/css" href="http://www.laurentluce.com/wp-content/themes/openark-blog/style.css" media="screen" />
+<style type="text/css" id="syntaxhighlighteranchor"></style>
+</head>
+
+<body>
+<div align="center">
+<div id="wrapper">
+<div id="doc1" class="yui-t4">
+<div id="hd">
+	<div id="titlewrapper">
+		<div id="blogtitle">
+			<h1>Distributed messaging using RabbitMQ and Python</h1>
+		</div>
+	</div>
+	<div id="newsflash">
+                
+	</div>
+	<div class="clear">&nbsp;</div>
+</div>
+
+
+<div id="bd" class="single">
+<div id="yui-main"><div class="yui-b">
+	<div class="post-wrap" id="post">
+			<div class="story-content">
+			<p>This tutorial shows how to distribute messages to multiple servers for processing. We will be using <a href="http://www.rabbitmq.com">RabbitMQ</a> which is based on AMQP.</p>
+<p>The way messaging works is that you have producers producing messages and consumers consuming them. We are going to have 1 producer generating random integers and 2 consumers: 1 consuming the odd integers and 1 consuming the even integers.</p>
+<p>The producer sends messages to the exchange and the consumers create and bind queues to the exchange to receive the messages they are interested in. The way messages are routed is using routing keys for the messages and binding keys for the queues.</p>
+<p><img src="./images/messaging_s.png"></p>
+<p>The producer will be running on the server &#8220;producer.messaging.com&#8221;, 1 consumer will be running on &#8220;consumer1.messaging.com&#8221; and the other one on &#8220;consumer2.messaging.com&#8221;.</p>
+<h2>Requirements</h2>
+<p>We need to install RabbitMQ server on producer.messaging.com and py-amqplib on the 3 servers.</p>
+<p>Here, I am using Ubuntu on all the servers.</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+sudo apt-get install rabbitmq-server
+sudo apt-get install python-amqplib
+</pre>
+<p>After installing rabbitmq-server, the server should be up and running.</p>
+<h2>Producer</h2>
+<p>First thing to do is to create a Python class for the producer. The constructor will initiate a connection to the RabbitMQ server. The constructor also takes as argument the name of the exchange which will receive all the messages from the producer.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+from amqplib import client_0_8 as amqp
+
+class Producer(object):
+    def __init__(self, exchange_name, host, userid, password):
+        &quot;&quot;&quot;
+        Constructor. Initiate connection with the RabbitMQ server.
+
+        @param exchange_name name of the exchange to send messages to
+        @param host RabbitMQ server host 
+        @param userid RabbitMQ server username
+        @param password RabbitMQ server user's password
+        &quot;&quot;&quot;
+        self.exchange_name = exchange_name
+        self.connection = amqp.Connection(host=host, userid=userid,
+            password=password, virtual_host=&quot;/&quot;, insist=False)
+        self.channel = self.connection.channel()
+    ...
+</pre>
+<p>We also need a method to publish a message to the exchange. This method takes the message and its routing key as arguments. The content type of the message here is text but you can change it. Also, we use persistence mode for the message (delivery_mode = 2) so best-effort is used for delivery.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def publish(self, message, routing_key):
+        &quot;&quot;&quot;
+        Publish message to exchange using routing key
+
+        @param text message to publish
+        @param routing_key message routing key
+        &quot;&quot;&quot;
+        msg = amqp.Message(message)
+        msg.properties[&quot;content_type&quot;] = &quot;text/plain&quot;
+        msg.properties[&quot;delivery_mode&quot;] = 2
+        self.channel.basic_publish(exchange=self.exchange_name,
+                                   routing_key=routing_key, msg=msg)
+</pre>
+<p>At last, we add a method to close the channel and the connection.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def close(self):
+        &quot;&quot;&quot;
+        Close channel and connection
+        &quot;&quot;&quot;
+        self.channel.close()
+        self.connection.close()
+</pre>
+<p>We will come back to this class when we look at our example.</p>
+<h2>Consumer</h2>
+<p>Let&#8217;s create our Consumer class to help us create consumers.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+from amqplib import client_0_8 as amqp
+
+class Consumer(object):
+    def __init__(self, host, userid, password):
+        &quot;&quot;&quot;
+        Constructor. Initiate a connection to the RabbitMQ server.
+
+        @param host RabbitMQ server host 
+        @param userid RabbitMQ server username
+        @param password RabbitMQ server user's password
+        &quot;&quot;&quot;
+        self.connection = amqp.Connection(host=host, userid=userid,
+            password=password, virtual_host=&quot;/&quot;, insist=False)
+        self.channel = self.connection.channel()
+</pre>
+<p>Our close method:</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def close(self):
+        &quot;&quot;&quot;
+        Close channel and connection
+        &quot;&quot;&quot;
+        self.channel.close()
+        self.connection.close()
+</pre>
+<p>Next is a method to create an exchange. We use the exchange type &#8220;direct&#8221; which means the broker routes the message using a straight match on the routing key. If a we bind a queue using the key &#8216;test&#8217;, only the messages with the routing key &#8216;test&#8217; will be sent to it.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def declare_exchange(self, exchange_name, durable=True, auto_delete=False):
+        &quot;&quot;&quot;
+        Create exchange.
+
+        @param exchange_name name of the exchange
+        @param durable will the server survive a server restart
+        @param auto_delete should the server delete the exchange when it is
+        no longer in use
+        &quot;&quot;&quot;
+        self.exchange_name = exchange_name
+        self.channel.exchange_declare(exchange=self.exchange_name,
+            type='direct', durable=durable, auto_delete=auto_delete)
+</pre>
+<p>Followed by a method to create a queue and bind it to the exchange. We need to indicate the binding key so the exchange knows which messages to send to the queue based on their routing key.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def declare_queue(self, queue_name, routing_key, durable=True, exclusive=False, auto_delete=False):
+        &quot;&quot;&quot;
+        Create a queue and bind it to the exchange.
+
+        @param queue_name Name of the queue to create
+        @param routing_key binding key
+        @param durable will the queue service a server restart
+        @param exclusive only 1 client can work with it
+        @param auto_delete should the server delete the exchange when it is 
+                no longer in use
+        &quot;&quot;&quot;
+        self.queue_name = queue_name
+        self.routing_key = routing_key
+        self.channel.queue_declare(queue=self.queue_name, durable=durable,
+                                   exclusive=exclusive, auto_delete=auto_delete)
+        self.channel.queue_bind(queue=self.queue_name,
+            exchange=self.exchange_name, routing_key=self.routing_key)
+</pre>
+<p>At this point, we can get define a method to start a consumer and use a callback for each message delivered. The next method allows us to do that.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def start_consuming(self, callback, queue_name=None, consumer_tag='consumer'):
+        &quot;&quot;&quot;
+        Start a consumer and register a function to be called when a message is consumed
+
+        @param callback function to call
+        @param queue_name name of the queue
+        @param consumer_tag a client-generated consumer tag to establish context
+        &quot;&quot;&quot;
+        if hasattr(self, 'queue_name') or queue_name:
+            self.channel.basic_consume(queue=getattr(self, 'queue_name',
+                    queue_name),
+                callback=callback, consumer_tag=consumer_tag)
+</pre>
+<p>We need the opposite of the previous method.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def stop_consuming(self, consumer_tag='consumer'):
+        &quot;&quot;&quot;
+        Cancel a consumer.
+
+        @param consumer_tag a client-generated consumer tag to establish context
+        &quot;&quot;&quot;
+        self.channel.basic_cancel(consumer_tag)
+</pre>
+<p>Last, we need a wait method to ask the consumer to be patient and wait for activity on the channel: ie: messages being delivered.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+    def wait(self):
+        &quot;&quot;&quot;
+        Wait for activity on the channel.
+        &quot;&quot;&quot;
+        while True:
+            self.channel.wait()
+</pre>
+<h2>Example</h2>
+<p>Let&#8217;s put our classes into action. We are going to define a producer and 2 consumers as described at the beginning of this tutorial.</p>
+<p>First, our producer will generate random integers and send them to the exchange. If the integer is odd, it will use the routing key &#8220;odd&#8221; and if the integer is even, it will use the routing key &#8220;even&#8221;. This code will be running on &#8220;producer.messaging.com&#8221;.</p>
+<p><img src="./images/messaging_1.png"></p>
+<pre class="brush: python; title: ; notranslate" title="">
+import random, time
+import producer
+p = producer.Producer(exchange_name='integers', host='producer.messaging.com', userid='guest', password='guest')
+while True:
+    # generate a random integer between 1 and 100 included
+    i = random.randint(1, 100)
+    if i % 2 == 0:
+        key = 'even'
+    else:
+        key = 'odd'
+    p.publish(str(i), key)
+    print 'integer: %d' % i 
+    time.sleep(1) 
+</pre>
+<p>Next is our first consumer running on &#8220;consumer1.messaging.com&#8221;. We declare an exchange named &#8220;integers&#8221; and create a queue and bind it to receive messages with the routing key &#8220;odd&#8221;. If the exchange and queue already exist, calling declare_exchange() and declare_queue() does nothing.</p>
+<p>We define a callback function which prints the odd integer and acknowledge the message so the exchange knows it has been delivered properly.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+import consumer
+
+c = consumer.Consumer(host='producer.messaging.com', userid='guest', password='guest')
+c.declare_exchange(exchange_name='integers')
+c.declare_queue(queue_name='odds', routing_key='odd')
+
+def message_callback(message):
+    print 'odd integer: %s' % message.body
+    c.channel.basic_ack(message.delivery_tag)
+
+c.start_consuming(message_callback)
+c.wait()
+</pre>
+<p>First time we call declare_exchange() and declare_queue(), we end up with the following:</p>
+<p><img src="./images/messaging_2.png"></p>
+<p>Similar to the first consumer, we create another consumer on &#8220;consumer2.messaging.com&#8221; to consume the even integers.</p>
+<pre class="brush: python; title: ; notranslate" title="">
+import consumer
+
+c = consumer.Consumer(host='producer.messaging.com', userid='guest', password='guest')
+c.declare_exchange(exchange_name='integers')
+c.declare_queue(queue_name='evens', routing_key='even')
+
+def message_callback(message):
+    print 'even integer: %s' % message.body
+    c.channel.basic_ack(message.delivery_tag)
+
+c.start_consuming(message_callback)
+c.wait()
+</pre>
+<p>We end up with the following:</p>
+<p><img src="./images/messaging_3.png"></p>
+<p>Let&#8217;s start our 2 consumers and our producer. This is the output of each:</p>
+<p>Producer:</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+integer: 14
+integer: 47
+integer: 6
+integer: 83
+...
+</pre>
+<p>Consumer 1:</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+odd integer: 47
+odd integer: 83
+</pre>
+<p>Consumer 2:</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+even integer: 14
+even integer: 6 
+</pre>
+<p>On the server where rabbitmq is running, we can use rabbitmqctl to take a look at the objects created.</p>
+<p>List the exchanges. We can see our exchange &#8220;integers&#8221; listed in the direct category.</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+$ sudo rabbitmqctl list_exchanges
+Listing exchanges ...
+amq.direct             direct
+amq.topic              topic
+amq.rabbitmq.logging   topic
+amq.fanout             fanout
+integers direct
+amq.headers            headers
+  direct
+amq.match              headers
+...done.
+</pre>
+<p>List the queues. We can check the number of messages to be consumed.</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+$ sudo rabbitmqctl list_queues
+Listing queues ...
+evens    4
+odds     3
+...done.
+</pre>
+<p>If you want to remove the exchange, all the queues. You have to first stop the app, then issue a reset follow by a start.</p>
+<pre class="brush: bash; title: ; notranslate" title="">
+$ sudo rabbitmqctl stop_app
+$ sudo rabbitmqctl reset
+$ sudo rabbitmqctl start_app
+</pre>
+</div>
+</div>
+<div id="ft">
+<script type='text/javascript' src='http://www.laurentluce.com/wp-content/plugins/akismet/_inc/form.js?ver=3.0.4'></script>
+<script type='text/javascript' src='http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/scripts/shCore.js?ver=2.1.364'></script>
+<script type='text/javascript' src='http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/scripts/shBrushBash.js?ver=2.1.364'></script>
+<script type='text/javascript' src='http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/scripts/shBrushPython.js?ver=2.1.364'></script>
+<script type='text/javascript'>
+	(function(){
+		var corecss = document.createElement('link');
+		var themecss = document.createElement('link');
+		var corecssurl = "http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/styles/shCore.css?ver=2.1.364";
+		if ( corecss.setAttribute ) {
+				corecss.setAttribute( "rel", "stylesheet" );
+				corecss.setAttribute( "type", "text/css" );
+				corecss.setAttribute( "href", corecssurl );
+		} else {
+				corecss.rel = "stylesheet";
+				corecss.href = corecssurl;
+		}
+		document.getElementsByTagName("head")[0].insertBefore( corecss, document.getElementById("syntaxhighlighteranchor") );
+		var themecssurl = "http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/styles/shThemeEclipse.css?ver=2.1.364";
+		if ( themecss.setAttribute ) {
+				themecss.setAttribute( "rel", "stylesheet" );
+				themecss.setAttribute( "type", "text/css" );
+				themecss.setAttribute( "href", themecssurl );
+		} else {
+				themecss.rel = "stylesheet";
+				themecss.href = themecssurl;
+		}
+		//document.getElementById("syntaxhighlighteranchor").appendChild(themecss);
+		document.getElementsByTagName("head")[0].insertBefore( themecss, document.getElementById("syntaxhighlighteranchor") );
+	})();
+	SyntaxHighlighter.config.clipboardSwf = 'http://www.laurentluce.com/wp-content/plugins/syntaxhighlighter/syntaxhighlighter2/scripts/clipboard.swf';
+	SyntaxHighlighter.config.strings.expandSource = 'show source';
+	SyntaxHighlighter.config.strings.viewSource = 'view source';
+	SyntaxHighlighter.config.strings.copyToClipboard = 'copy to clipboard';
+	SyntaxHighlighter.config.strings.copyToClipboardConfirmation = 'The code is in your clipboard now';
+	SyntaxHighlighter.config.strings.print = 'print';
+	SyntaxHighlighter.config.strings.help = '?';
+	SyntaxHighlighter.config.strings.alert = 'SyntaxHighlighter\n\n';
+	SyntaxHighlighter.config.strings.noBrush = 'Can\'t find brush for: ';
+	SyntaxHighlighter.config.strings.brushNotHtmlScript = 'Brush wasn\'t configured for html-script option: ';
+	SyntaxHighlighter.defaults['pad-line-numbers'] = true;
+	SyntaxHighlighter.all();
+</script>
+</div>
+</div><!-- End id=doc -->
+</div><!-- End id=wrapper -->
+<div class="clear">&nbsp;</div>
+
+</div><!-- End align=center -->
+</body>
+</html>
