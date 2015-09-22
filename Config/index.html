@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Setting up an AWS ec2 instance for Nginx, Django, uWSGI, and MySQL – Francis Yaconiello – Application
+        Programmer</title>
+    <meta charset="utf-8">
+    <link rel="stylesheet" type="text/css"
+          href="./Setting up an AWS ec2 instance for Nginx, Django, uWSGI, and MySQL – Francis Yaconiello – Application Programmer_files/style.css">
+    <script async=""
+            src="./Setting up an AWS ec2 instance for Nginx, Django, uWSGI, and MySQL – Francis Yaconiello – Application Programmer_files/analytics.js"></script>
+    <script type="text/javascript" async=""
+            src="./Setting up an AWS ec2 instance for Nginx, Django, uWSGI, and MySQL – Francis Yaconiello – Application Programmer_files/embed.js"></script>
+</head>
+<body>
+<div id="main" role="main" class="container">
+    <article class="post">
+        <h1>Setting up an AWS ec2 instance for Nginx, Django, uWSGI, and MySQL</h1>
+
+        <div class="entry">
+            <h3 id="getting-an-ubuntu-server-set-up-on-aws">Getting an ubuntu server set up on AWS</h3>
+            <h4 id="ec2-setup">EC2 Setup</h4>
+
+            <p>Log into your AWS panel and navigate into the EC2 management console.<br>
+                Click “Launch Instance”. Select “Classic Wizard” and then click continue.</p>
+            <ul>
+                <li>Choose an AMI</li>
+                <li>Choose “Ubuntu Server 12.04.1 LTS” AMI and click continue.</li>
+                <li>Instance Details</li>
+                <li>Make sure that the number of Instances is set to “1” and that instance Type is set to “T1 Micro” and
+                    click Continue.
+                </li>
+                <li>Under “Advanced Instance Options” leave all options defaulted and click Continue.</li>
+                <li>Under “Storage Device Configuration” leave all options defaulted and click Continue.</li>
+                <li>K/V Pairs
+                    <ul>
+                        <li>Add a Key “Name” with a value describing the app/apps that will be living on this server.
+                        </li>
+                        <li>Add a Key “Stack” with a value that describes the application stack “django, MySQL, nginx”
+                        </li>
+                        <li>Click Continue</li>
+                    </ul>
+                </li>
+                <li>Create Key Pair
+                    <ul>
+                        <li>Under Create a new Key Pair, enter the same value as you used in your “Name” K/V in the last
+                            step.
+                        </li>
+                        <li>Click the “Create and Download Key Pair” link and note where this saves to on your computer
+                            (this is your .pem file referred to later).
+                        </li>
+                        <li>Then Click Continue</li>
+                    </ul>
+                </li>
+                <li>Configure Firewall</li>
+                <li>Create a new Security Group
+                    <ul>
+                        <li>For “Group Name” enter “Developers”.</li>
+                        <li>For “Group Description” enter “Anyone Collaborating”.</li>
+                        <li>Create Rules for MySQL, SSH, and HTTP.</li>
+                        <li>Click Continue.</li>
+                    </ul>
+                </li>
+                <li>Review</li>
+                <li>look over everything and click Launch.</li>
+            </ul>
+            <h4 id="elastic-ip">Elastic IP</h4>
+            <ul>
+                <li>Navigate to the EC2 management console.</li>
+                <li>Under “NETWORK &amp; SECURITY” click on “Elastic IPs”.
+                    <ul>
+                        <li>At the top of the page click “Allocate New Address”.</li>
+                        <li>For “EIP used in” select “EC2” and click “Yes, Allocate”.</li>
+                        <li>Select the New EIP by clicking the checkbox next to it and click “Associate Address” at the
+                            top of the page.
+                        </li>
+                        <li>Select the EC2 instance you created in the step prior and click “Yes, Allocate”.</li>
+                    </ul>
+                </li>
+            </ul>
+            <h4 id="dns">DNS</h4>
+
+            <p>Do you have a domain you want to point to this IP?<br>
+                go to your DNS management console where the domain is registered and create an A record pointing the
+                domain to the EIP</p>
+
+            <div class="highlight"><pre><code class="language-bash" data-lang="bash">Domain <span class="p">|</span>
+                Type <span class="p">|</span> EIP
+                &lt;vhost&gt; <span class="p">|</span> A <span class="p">|</span> XXX.XXX.XXX.XXX</code></pre>
+            </div>
+            <p>Now wait for the DNS to propagate</p>
+
+            <h3 id="configure-your-server">Configure your server</h3>
+            <h4 id="ssh">SSH</h4>
+
+            <p>Run the following command<code>chmod 600 &lt;your pem filename&gt;.pem &amp;&amp; ssh -i &lt;your pem
+                filename&gt;.pem ubuntu@&lt;your EIP&gt;</code> to ssh into your server.</p>
+            <h4 id="set-ubuntu-users-password">Set ubuntu user’s password</h4>
+
+            <p>Run <code>sudo passwd ubuntu</code> and follow the steps to change the default user’s password.</p>
+            <h4 id="set-up-the-directories-to-run-your-applications">Set up the directories to run your
+                applications</h4>
+            <ul>
+                <li><code>mkdir ~/web/</code> web is where the applications (vhosts) will live</li>
+                <li><code>mkdir ~/web/&lt;vhost&gt;/</code> name the vhost appropriately (usually for me www.domain.com
+                    OR dev.domain.com)
+                </li>
+                <li><code>mkdir ~/web/&lt;vhost&gt;/app/</code> location where the project’s git will be initialized
+                </li>
+                <li><code>mkdir ~/web/&lt;vhost&gt;/logs/</code> location of logs</li>
+                <li><code>mkdir ~/web/&lt;vhost&gt;/static/</code> location of static assets for collectstatic</li>
+                <li><code>mkdir ~/web/&lt;vhost&gt;/media/</code> location of user uploaded media</li>
+            </ul>
+            <h4 id="install-packages">Install Packages</h4>
+            <h5 id="enabling-ubuntus-multiverse">Enabling ubuntu’s Multiverse</h5>
+            <ul>
+                <li><code>sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup</code> backup sources list</li>
+                <li>
+                    <p><code>sudo nano /etc/apt/sources.list</code> and uncomment the multiverse lines that look like
+                        the following and then save.</p>
+
+                    <p><code>deb http://us-east-1.ec2.archive.ubuntu.com/ubuntu/ precise multiverse</code> <br>
+                        <code>deb-src http://us-east-1.ec2.archive.ubuntu.com/ubuntu/ precise multiverse </code><br>
+                        <code>deb http://us-east-1.ec2.archive.ubuntu.com/ubuntu/ precise-updates multiverse </code><br>
+                        <code>deb-src http://us-east-1.ec2.archive.ubuntu.com/ubuntu/ precise-updates multiverse</code>
+                    </p>
+                </li>
+                <li><code>sudo apt-get update</code></li>
+            </ul>
+            <h5 id="python">Python</h5>
+            <ul>
+                <li>install python headers <code>sudo aptitude install python2.7-dev</code></li>
+                <li><code>sudo aptitude install python-setuptools</code></li>
+                <li><code>sudo easy_install pip</code></li>
+                <li><code>sudo pip install virtualenv</code></li>
+                <li><code>cd /home/ubuntu/web/&lt;vhost.com&gt;/ &amp;&amp; virtualenv --no-site-packages venv</code>
+                </li>
+            </ul>
+            <h5 id="install--configure-git">Install &amp; configure GIT</h5>
+            <ul>
+                <li><code>sudo apt-get install git</code></li>
+                <li><code>ssh-keygen -t rsa -C "user@test.com"</code></li>
+                <li><code>git config --global user.name "AWS Server"</code></li>
+                <li><code>git config --global user.email "hello@test.com"</code></li>
+                <li><code>git config --global core.autocrlf input</code></li>
+                <li>initialize your first vhost’s git repo: <code>cd /home/ubuntu/web/&lt;vhost&gt;/app &amp;&amp; git
+                    init</code></li>
+            </ul>
+            <p><em>Note: don’t forget to add your public key as a deploy key on github for the repo. <code>cat
+                ~/.ssh/id_rsa.pub</code> and then copy the output to your clipboard. On github.com, go to the <code>Settings
+                &gt; Deploy Keys</code> page and paste the ssh public key into the Key field and name it appropriately.</em>
+            </p>
+            <h4 id="initialize-your-application">Initialize your application.</h4>
+            <ul>
+                <li>add a remote origin for this repo <code>cd /home/ubuntu/web/&lt;vhost&gt;/app &amp;&amp; git remote
+                    add origin git@github.com:Y/X.git</code></li>
+                <li>run the command <code>git pull origin master</code> to bring your remote project local</li>
+                <li>activate the virtualenv <code>source /home/ubuntu/web/&lt;vhost&gt;/venv/bin/activate</code></li>
+                <li><code>cd /home/ubuntu/web/&lt;vhost&gt;/app &amp;&amp; pip install -r requirements.txt</code></li>
+            </ul>
+            <p><em>Note: If your app uses mysql as a database backend, run sudo apt-get install libmysqlclient-dev
+                BEFORE you pip install mysql-python. This is necessary regardless of where the MySQL server
+                resides.</em></p>
+
+            <p><em>Note: If you use the Python Image Library(PIL) install it’s dependencies so that when PIL is
+                installed support for jpeg, png etc is already there. <code>sudo apt-get build-dep python-imaging &amp;&amp;
+                    sudo ln -s /usr/lib/`uname -i`-linux-gnu/libfreetype.so /usr/lib/ &amp;&amp; sudo ln -s
+                    /usr/lib/`uname -i`-linux-gnu/libjpeg.so /usr/lib/ &amp;&amp; sudo ln -s /usr/lib/`uname
+                    -i`-linux-gnu/libz.so /usr/lib/</code></em></p>
+            <h4 id="uwsgi">UWSGI</h4>
+
+            <p>I was using gunicorn for a my apps until I got a good look at some of the performance /benefits of uWSGI.
+                Many thanks to this <a
+                        href="http://posterous.adambard.com/start-to-finish-serving-mysql-backed-django-w">blogpost</a>
+                for the upstart script help.</p>
+
+            <p>First, install uwsgi globally: <code>sudo pip install uwsgi</code>.</p>
+
+            <p>Next, create a wsgi.py file for this vhost <code>nano /home/ubuntu/web/&lt;vhost&gt;/wsgi.py</code> Add
+                the following:</p>
+
+            <div class="highlight"><pre><code class="language-python" data-lang="python"><span class="kn">import</span>
+                <span class="nn">os</span><span class="o">,</span> <span class="nn">sys</span><span class="o">,</span>
+                <span class="nn">site</span><span class="o">,</span> <span class="nn">django.core.handlers.wsgi</span>
+
+                <span class="n">SITE_DIR</span> <span class="o">=</span> <span class="s">'/home/ubuntu/web/&lt;vhost&gt;/app/'</span>
+                <span class="n">site</span><span class="o">.</span><span class="n">addsitedir</span><span
+                        class="p">(</span><span class="n">SITE_DIR</span><span class="p">)</span>
+                <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span
+                        class="o">.</span><span class="n">append</span><span class="p">(</span><span
+                        class="n">SITE_DIR</span><span class="p">)</span>
+
+                <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span
+                        class="p">[</span><span class="s">'DJANGO_SETTINGS_MODULE'</span><span class="p">]</span> <span
+                        class="o">=</span> <span class="s">'&lt;project&gt;.settings'</span>
+                <span class="n">application</span> <span class="o">=</span> <span class="n">django</span><span
+                        class="o">.</span><span class="n">core</span><span class="o">.</span><span
+                        class="n">handlers</span><span class="o">.</span><span class="n">wsgi</span><span
+                        class="o">.</span><span class="n">WSGIHandler</span><span class="p">()</span></code></pre>
+            </div>
+            <p><em>Note: this is also where you would add the newrelic application wrapper</em></p>
+
+            <p>Lastly, create an init script to daemonize this vhost <code>sudo nano
+                /etc/init/&lt;vhostid&gt;uwsgi.conf</code> and add the following:</p>
+
+            <div class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="c"># file: /etc/init/&lt;vhostid&gt;uwsgi.conf </span>
+                description <span class="s2">"uWSGI server for &lt;vhost name&gt;"</span>
+
+                start on runlevel <span class="o">[</span>2345<span class="o">]</span>
+                stop on runlevel <span class="o">[</span>!2345<span class="o">]</span>
+
+                respawn
+                <span class="nb">exec</span> /usr/local/bin/uwsgi --home /home/ubuntu/web/&lt;vhost&gt;/app/ --socket
+                /home/ubuntu/web/&lt;vhost&gt;/&lt;vhostid&gt;uwsgi.sock --chmod-socket --module wsgi --pythonpath
+                /home/ubuntu/web/&lt;vhost&gt;/ -H /home/ubuntu/web/&lt;vhost&gt;/venv</code></pre>
+            </div>
+            <p><em>Note: what you name this file will effect how you refer to this application <code>sudo service &lt;vhostid&gt;uwsgi
+                restart</code> so maybe you want to name your process <code>production.conf</code> or
+                <code>staging.conf</code>…</em></p>
+
+            <p>Lets look at the options we called uwsgi with: </p>
+            <ul>
+                <li>home The home directory for uwsgi to use</li>
+                <li>socket The path to a socket file. We’ll give this to Nginx later.</li>
+                <li>chmod-socket Set the permissions on the socket so we can use it.</li>
+                <li>module The wsgi configuration file’s name, without extension. So, myapp_wsgi, not myapp_wsgi.py</li>
+                <li>pythonpath The directory in which the wsgi configuration file resides.</li>
+                <li>H The path to the virtualenv to use with uwsgi</li>
+            </ul>
+            <h4 id="nginx">NGINX</h4>
+
+            <p>Installation</p>
+            <ul>
+                <li>Install nginx <code>sudo apt-get install nginx</code></li>
+                <li>Test to make sure that nginx starts: <code>sudo service nginx start</code> then stop the service
+                    <code>sudo service nginx stop</code></li>
+                <li>Make sure that nginx starts automatically <code>sudo update-rc.d nginx defaults</code><br>
+                    Virtual Hosts
+                </li>
+            </ul>
+            <p>Next, create the vhost’s configuration <code>sudo nano
+                /etc/nginx/sites-available/&lt;vhost.com&gt;</code>. (sample below)</p>
+
+            <div class="highlight"><pre><code class="language-bash" data-lang="bash">server <span class="o">{</span>
+                listen 80<span class="p">;</span>
+
+                server_name &lt;vhost&gt;.com www.&lt;vhost&gt;.com<span class="p">;</span>
+
+                access_log /home/ubuntu/web/www.&lt;vhost&gt;.com/logs/access.log<span class="p">;</span>
+                error_log /home/ubuntu/web/www.&lt;vhost&gt;.com/logs/error.log<span class="p">;</span>
+
+                <span class="c"># no security problem here, since / is alway passed to upstream</span>
+                root /home/ubuntu/web/www.&lt;vhost&gt;.com<span class="p">;</span>
+
+                <span class="c"># serve directly - analogous for static/staticfiles</span>
+                location /media/ <span class="o">{</span>
+                <span class="c"># if asset versioning is used</span>
+                <span class="k">if</span> <span class="o">(</span><span class="nv">$query_string</span><span
+                        class="o">)</span> <span class="o">{</span>
+                expires max<span class="p">;</span>
+                <span class="o">}</span>
+                <span class="o">}</span>
+                location /static/ <span class="o">{</span>
+                <span class="c"># if asset versioning is used</span>
+                <span class="k">if</span> <span class="o">(</span><span class="nv">$query_string</span><span
+                        class="o">)</span> <span class="o">{</span>
+                expires max<span class="p">;</span>
+                <span class="o">}</span>
+                <span class="o">}</span>
+                location / <span class="o">{</span>
+                uwsgi_pass unix:///home/ubuntu/web/www.&lt;vhost&gt;.com/&lt;vhost&gt;uwsgi.sock<span class="p">;</span>
+                include uwsgi_params<span class="p">;</span>
+                <span class="o">}</span>
+
+                <span class="c"># what to serve if upstream is not available or crashes</span>
+                error_page <span class="m">400</span> /static/400.html<span class="p">;</span>
+                error_page <span class="m">403</span> /static/403.html<span class="p">;</span>
+                error_page <span class="m">404</span> /static/404.html<span class="p">;</span>
+                error_page <span class="m">500</span> <span class="m">502</span> <span class="m">503</span> <span
+                        class="m">504</span> /static/500.html<span class="p">;</span>
+
+                <span class="c"># Compression</span>
+                gzip on<span class="p">;</span>
+                gzip_http_version 1.0<span class="p">;</span>
+                gzip_comp_level 5<span class="p">;</span>
+                gzip_proxied any<span class="p">;</span>
+                gzip_min_length 1100<span class="p">;</span>
+                gzip_buffers <span class="m">16</span> 8k<span class="p">;</span>
+                gzip_types text/plain text/html text/css application/x-javascript text/xml application/xml
+                application/xml+rss text/javascript<span class="p">;</span>
+                <span class="c"># Some version of IE 6 don't handle compression well on some mime-types, </span>
+                <span class="c"># so just disable for them</span>
+                gzip_disable <span class="s2">"MSIE [1-6].(?!.*SV1)"</span><span class="p">;</span>
+                <span class="c"># Set a vary header so downstream proxies don't send cached gzipped </span>
+                <span class="c"># content to IE6</span>
+                gzip_vary on<span class="p">;</span>
+                <span class="o">}</span></code></pre>
+            </div>
+            <ul>
+                <li>Enable this vhost: <code>sudo ln -s /etc/nginx/sites-available/&lt;vhost.com&gt;
+                    /etc/nginx/sites-enabled/&lt;vhost.com&gt;</code></li>
+                <li>Restart Nginx for changes to take effect <code>sudo service nginx restart</code></li>
+            </ul>
+            <h4 id="mysql">MySQL</h4>
+
+            <p>This step guides you through setting up a locally hosted mysql database server if you aren’t using a
+                dedicated database solution such as Amazon’s RDS.</p>
+            <ul>
+                <li>install mysql server: <code>sudo apt-get install mysql-server libmysqlclient-dev</code> and set
+                    password for the root user
+                </li>
+                <li>restart the mysql process: <code>sudo service mysql restart</code></li>
+            </ul>
+        </div>
+    </article>
+</div>
+
+</body>
+</html>
